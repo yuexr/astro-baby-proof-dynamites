@@ -15,6 +15,12 @@ static volatile LONG initialized;
 static const char *last_status = "Not initialized.";
 static int allow_attached_vehicle_destruction;
 
+static const char *active_status(void) {
+    return allow_attached_vehicle_destruction
+        ? "ACTIVE: Attached vehicle destruction ON. Only directly attached vehicles are exempt from protection. Tiny blasts; base equipment protected; caches/debris breakable."
+        : "ACTIVE: Attached vehicle destruction OFF. Vehicles and base equipment protected; tiny blasts; caches/debris breakable.";
+}
+
 static void load_options(const wchar_t *path) {
     wchar_t value[32];
     GetPrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",
@@ -129,9 +135,8 @@ static int name_is_breakable(const char *n) {
            !strcmp(n,"ConsumableLiquidCanister_C");
 }
 
-static int actor_matches(void *actor, int vehicle) {
-    if (!actor || !name_pool) return 0;
-    unsigned char *cls=*(unsigned char **)((unsigned char *)actor+0x10);
+static int class_matches(unsigned char *cls, int vehicle) {
+    if (!name_pool) return 0;
     for (unsigned depth=0; cls && depth<64; ++depth) {
         uint32_t index; memcpy(&index,cls+0x18,4);
         if ((index>>16)>=8192) return 0;
@@ -142,7 +147,9 @@ static int actor_matches(void *actor, int vehicle) {
         unsigned len=header>>6;
         if (len && len<256 && !(header&1)) {
             char name[256]; memcpy(name,entry+2,len); name[len]=0;
-            if (vehicle == 3 ? !strcmp(name,"ModernPOI_WindFarm_B-01_Small_C") :
+            if (vehicle == 5 ? !strcmp(name,"PackagedItem_T1_C") :
+                vehicle == 4 ? !strcmp(name,"RailCarBase") :
+                vehicle == 3 ? !strcmp(name,"ModernPOI_WindFarm_B-01_Small_C") :
                 vehicle == 2 ? !strcmp(name,"Item_PuzzleBox_Top_C") :
                 (vehicle == 1 ? !strcmp(name,"VehicleBase") : name_is_breakable(name))) return 1;
         }
@@ -150,6 +157,10 @@ static int actor_matches(void *actor, int vehicle) {
         cls=*(unsigned char **)(cls+0x40);
     }
     return 0;
+}
+
+static int actor_matches(void *actor, int vehicle) {
+    return actor && class_matches(*(unsigned char **)((unsigned char *)actor+0x10),vehicle);
 }
 
 static int actor_is_breakable(void *actor) { return actor_matches(actor,0); }
@@ -174,8 +185,26 @@ static void *immediate_parent(void *actor) {
     return parent ? *(void **)(parent+0xA8) : NULL;
 }
 
+static int is_packaged_rail_car(void *actor) {
+    if (!actor_matches(actor,5)) return 0;
+    unsigned char *item=*(unsigned char **)((unsigned char *)actor+0x3D8);
+    if (!item) return 0;
+    // Generic boxes use storedSubItemType to identify their contents.
+    unsigned char *type=*(unsigned char **)(item+0x160);
+    if (!type) return 0;
+    unsigned char *pickup_class=*(unsigned char **)(type+0xC8);
+    return class_matches(pickup_class,4);
+}
+
 static unsigned char guarded_destroy(void *component, void *actor) {
-    int allowed=actor_is_breakable(actor) || is_attached_vehicle(component,actor);
+    int attached_vehicle=is_attached_vehicle(component,actor);
+    int allowed=actor_is_breakable(actor) || attached_vehicle;
+    int packaged_rail=is_packaged_rail_car(actor);
+    if (actor_matches(actor,4)) allowed=0;
+    if (packaged_rail) {
+        void *owner=component ? *(void **)((unsigned char *)component+0xA8) : NULL;
+        allowed=allow_attached_vehicle_destruction && owner && immediate_parent(owner)==actor;
+    }
     // Wrecked Medium Platform B.
     if (actor_matches(actor,3)) {
         void *owner=component ? *(void **)((unsigned char *)component+0xA8) : NULL;
@@ -200,7 +229,7 @@ static unsigned char guarded_destroy(void *component, void *actor) {
         }
     }
     unsigned char result=allowed ? original_destroy(component,actor) : 0;
-    snprintf(report,sizeof(report),"classic-v1.2.2 target=%s allowed=%d native_result=%u\r\n",name,allowed,(unsigned)result);
+    snprintf(report,sizeof(report),"classic-v1.3.0 target=%s allowed=%d native_result=%u packaged_rail=%d\r\n",name,allowed,(unsigned)result,packaged_rail);
     // Keep event records separate from startup status.
     wchar_t path[32768];DWORD n=GetModuleFileNameW(self_module,path,32768);
     if(n && n<32600) {
@@ -322,15 +351,23 @@ static const char *activate(void) {
         VirtualFree(stub,0,MEM_RELEASE);VirtualFree(guard,0,MEM_RELEASE);
         return "INACTIVE: Could not safely install both filters. Restart to retry.";
     }
-    return allow_attached_vehicle_destruction
-        ? "ACTIVE: Attached vehicle destruction ON. Only directly attached vehicles are exempt from protection. Tiny blasts; base equipment protected; caches/debris breakable. Restart after config changes."
-        : "ACTIVE: Attached vehicle destruction OFF. Vehicles and base equipment protected; tiny blasts; caches/debris breakable. Restart after config changes.";
+    return active_status();
 }
 
 
 __declspec(dllexport) int luaopen_babyproofdynamites(void *lua_state) {
     (void)lua_state;
     if (InterlockedCompareExchange(&initialized, 1, 0)==0) last_status=activate();
+    write_status(last_status);
+    return 0;
+}
+
+__declspec(dllexport) int luaopen_babyproofdynamites_refresh(void *lua_state) {
+    (void)lua_state;
+    if (!strncmp(last_status,"ACTIVE:",7)) {
+        load_config();
+        last_status=active_status();
+    }
     write_status(last_status);
     return 0;
 }

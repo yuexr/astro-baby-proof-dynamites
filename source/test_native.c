@@ -153,6 +153,58 @@ int main(void) {
     CHECK(((DestroyFunction)destroy)(component,actor)==0);
     set_class(actor,cls,"Breadboard_T3_C");CHECK(((DestroyFunction)destroy)(component,actor)==0);
     puts("PASS: wind-farm wreck direct attachment; nearby/cargo/unattached exclusions; intact platform protected.");
+    // Rail vehicles require a package; identify the contents, not the box size.
+    unsigned char box[0x700]={0},box_class[96]={0},box_base[96]={0};
+    unsigned char item[0x170]={0},type[0xD0]={0},rail_base[96]={0};
+    unsigned char rail_class[96]={0},other_class[96]={0};
+    set_derived(box,box_class,box_base,"PackagedItem_T2_C","PackagedItem_T1_C");
+    ptr=item; memcpy(box+0x3D8,&ptr,8);
+    ptr=type; memcpy(item+0x160,&ptr,8);
+    set_class(vehicle,rail_base,"RailCarBase");
+    ptr=vehicle_base; memcpy(rail_base+0x40,&ptr,8);
+    const char *rail_types[]={"RailCar_C","RailCar_Engine_C","RailCar_Engine_Personal_C","CustomRailCar_C"};
+    for(unsigned i=0;i<sizeof(rail_types)/sizeof(*rail_types);++i) {
+        set_class(vehicle,rail_class,rail_types[i]);
+        ptr=rail_base; memcpy(rail_class+0x40,&ptr,8);
+        ptr=rail_class; memcpy(type+0xC8,&ptr,8);
+        CHECK(is_packaged_rail_car(box));
+        ptr=mount; memcpy(root+0xC8,&ptr,8);
+        ptr=box; memcpy(mount+0xA8,&ptr,8);
+        allow_attached_vehicle_destruction=0;
+        CHECK(((DestroyFunction)destroy)(component,box)==0);
+        allow_attached_vehicle_destruction=1;
+        CHECK(((DestroyFunction)destroy)(component,box)==1);
+        ptr=storage; memcpy(mount+0xA8,&ptr,8);
+        CHECK(((DestroyFunction)destroy)(component,box)==0);
+        memset(root+0xC8,0,8);
+        CHECK(((DestroyFunction)destroy)(component,box)==0);
+        ptr=mount; memcpy(root+0xC8,&ptr,8);
+        ptr=vehicle; memcpy(mount+0xA8,&ptr,8);
+        CHECK(((DestroyFunction)destroy)(component,vehicle)==0);
+        allow_attached_vehicle_destruction=0;
+        CHECK(((DestroyFunction)destroy)(component,vehicle)==0);
+    }
+    allow_attached_vehicle_destruction=1;
+    ptr=box; memcpy(mount+0xA8,&ptr,8);
+    // All tiers and the special printed personal-engine package use the same parent.
+    const char *boxes[]={"PackagedItem_T1_C","PackagedItem_T3_C","PackagedItem_T2_RailCar_EnginePersonal_C"};
+    for(unsigned i=0;i<sizeof(boxes)/sizeof(*boxes);++i) {
+        set_derived(box,box_class,box_base,boxes[i],"PackagedItem_T1_C");
+        CHECK(((DestroyFunction)destroy)(component,box)==1);
+    }
+    set_class(actor,other_class,"Smelter_C");
+    ptr=other_class; memcpy(type+0xC8,&ptr,8);
+    CHECK(!is_packaged_rail_car(box));
+    CHECK(((DestroyFunction)destroy)(component,box)==0);
+    set_class(actor,other_class,"VTOL_BP_C");
+    ptr=vehicle_base; memcpy(other_class+0x40,&ptr,8);
+    CHECK(!is_packaged_rail_car(box));
+    CHECK(((DestroyFunction)destroy)(component,box)==0);
+    memset(type+0xC8,0,8); CHECK(!is_packaged_rail_car(box));
+    memset(item+0x160,0,8); CHECK(!is_packaged_rail_car(box));
+    memset(box+0x3D8,0,8); CHECK(!is_packaged_rail_car(box));
+    CHECK(((DestroyFunction)destroy)(component,box)==0);
+    puts("PASS: packaged rail cars/engines/subclasses; ON/OFF and direct attachment; unpackaged rails, other packages and missing contents protected.");
     // Missing/invalid config preserves protection; only explicit true opts in.
     wchar_t tempdir[MAX_PATH],config[MAX_PATH];
     CHECK(GetTempPathW(MAX_PATH,tempdir));CHECK(GetTempFileNameW(tempdir,L"bpd",0,config));
