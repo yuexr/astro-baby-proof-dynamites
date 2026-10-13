@@ -1,0 +1,20 @@
+// Wreck parents and debris classes not covered by those parents.
+static const char *debris_classes[] = {
+    "Slottable_Item_C",
+    "POI_Item_BASE_C",
+    "ModernPOI_Breadboard_T2_BASE_C",
+    "ModernPOI_Breadboard_Partial_T3_BASE_C",
+    "Debris_Wreckage_Hatch_01a_C",
+    "Debris_Wreckage_Hatch_01b_C",
+    "Debris_Wreckage_Hatch_01c_C",
+    "Debris_Wreckage_Hatch_01d_C",
+    "HolidayGift_Debris1_C",
+    "HolidayGift_Debris2_C",
+    "HolidayGift_Debris3_C",
+    "HolidayGift_Debris4_C",
+    "HolidayGift_Debris5_C",
+    "Item_ModernPOI_Wrecked_Round_Door_C",
+    "Item_ModernPOI_Wrecked_TerrariumA_C",
+    "Item_ModernPOI_Wrecked_TerrariumB_C",
+    "Item_Wreckage_HazardousContainer_A_C",
+};
