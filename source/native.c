@@ -190,7 +190,10 @@ static int is_packaged_rail_car(void *actor) {
     unsigned char *item=*(unsigned char **)((unsigned char *)actor+0x3D8);
     if (!item) return 0;
     // Generic boxes use storedSubItemType to identify their contents.
-    unsigned char *type=*(unsigned char **)(item+0x160);
+    unsigned char *type_class=*(unsigned char **)(item+0x160);
+    if (!type_class) return 0;
+    // storedSubItemType is a UClass; PickupActor belongs to its default object.
+    unsigned char *type=*(unsigned char **)(type_class+0x118);
     if (!type) return 0;
     unsigned char *pickup_class=*(unsigned char **)(type+0xC8);
     return class_matches(pickup_class,4);
