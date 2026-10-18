@@ -28,8 +28,12 @@ static unsigned char *make_function(const unsigned char *prefix) {
     const unsigned char tail[]={0xB8,1,0,0,0,0xC3};memcpy(p+7,tail,sizeof(tail));
     return p;
 }
+#include "test_compatibility.h"
+
 int main(void) {
     unsigned char *bp=fake_block;memcpy(fake_pool+16,&bp,sizeof(bp));name_pool=fake_pool;
+    add_name("None");
+    test_compatibility();
     unsigned char actor[384]={0},cls[96]={0},parent[96]={0};
     const char *allowed[]={"Destructible_PlacementActor_DataCache_EXOChip_C",
         "Destructible_PlacementActor_Base_BoulderIce_C","Destructible_PlacementActor_DataCache_MissionA_C",

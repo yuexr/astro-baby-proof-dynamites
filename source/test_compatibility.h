@@ -1,0 +1,72 @@
+static void test_compatibility(void) {
+    unsigned char *image=VirtualAlloc(NULL,0x5000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    CHECK(image);
+    IMAGE_DOS_HEADER *dos=(IMAGE_DOS_HEADER *)image;
+    dos->e_magic=IMAGE_DOS_SIGNATURE;dos->e_lfanew=0x80;
+    IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(image+0x80);
+    nt->Signature=IMAGE_NT_SIGNATURE;nt->FileHeader.Machine=IMAGE_FILE_MACHINE_AMD64;
+    nt->FileHeader.NumberOfSections=1;nt->FileHeader.SizeOfOptionalHeader=sizeof(nt->OptionalHeader);
+    nt->OptionalHeader.SizeOfImage=0x5000;
+    IMAGE_SECTION_HEADER *section=IMAGE_FIRST_SECTION(nt);
+    section->VirtualAddress=0x1000;section->Misc.VirtualSize=0x1000;
+    section->Characteristics=IMAGE_SCN_MEM_EXECUTE;
+    unsigned char *destroy=image+0x1000;
+    memcpy(destroy,destroy_signature,sizeof(destroy_signature));
+    put32(destroy+0x65,0x12345678);
+    unsigned matches=0;
+    CHECK(!find_target(image,destroy_signature,sizeof(destroy_signature),&matches) && matches==0);
+    CHECK(find_target_masked(image,destroy_signature,sizeof(destroy_signature),0x65,4,&matches)==destroy && matches==1);
+    memcpy(image+0x1200,destroy,sizeof(destroy_signature));matches=0;
+    CHECK(find_target_masked(image,destroy_signature,sizeof(destroy_signature),0x65,4,&matches) && matches==2);
+    memset(image+0x1200,0,sizeof(destroy_signature));destroy[4]^=1;matches=0;
+    CHECK(!find_target_masked(image,destroy_signature,sizeof(destroy_signature),0x65,4,&matches) && matches==0);
+    destroy[4]^=1;
+    unsigned char *objects=image+0x3000,*pool=image+0x3300;
+    memcpy(destroy+0xA1,"\x3B\x05",2);put32(destroy+0xA3,(int32_t)((objects+0x24)-(destroy+0xA7)));
+    memcpy(destroy+0xC2,"\x48\x8B\x05",3);put32(destroy+0xC5,(int32_t)((objects+0x10)-(destroy+0xC9)));
+    CHECK(find_object_array(image,destroy)==objects);
+    destroy[0xA3]^=1;CHECK(!find_object_array(image,destroy));destroy[0xA3]^=1;
+    unsigned char *block=fake_block;memcpy(pool+16,&block,8);
+    unsigned char *ref=image+0x1800;
+    memcpy(ref,"\x48\x8D\x0D",3);put32(ref+3,(int32_t)(pool-(ref+7)));
+    ref[7]=0xE8;memcpy(ref+12,"\x4C\x8B\xC0\xC6\x05",5);ref[21]=1;
+    const unsigned char tail[]={0x48,0x8B,0x44,0x24,0x38,0x48,0xC1,0xE8,0x20,0x8D,0x0C,0x00,0x49,0x8B,0x44,0xF8,0x10};
+    memcpy(ref+22,tail,sizeof(tail));
+    CHECK(find_name_pool(image)==pool);
+    ref[34]^=1;CHECK(!find_name_pool(image));ref[34]^=1;
+    const char *owners[]={"Actor","SceneComponent","PhysicalItem","ItemComponent","ItemType","ExplosiveComponent"};
+    const char *bases[]={"Object","ActorComponent","Actor","ActorComponent","ControlSymbol","ActorComponent"};
+    unsigned char classes[6][0x120]={{0}},defaults[6][64]={{0}},supers[6][96]={{0}};
+    unsigned char meta[96]={0},dummy[64]={0},properties[10][0x50]={{0}},slots[6*24]={0};
+    unsigned char *chunk=slots,**chunks=&chunk;memcpy(objects+0x10,&chunks,8);
+    *(int32_t *)(objects+0x24)=6;set_class(dummy,meta,"Class");
+    for (unsigned c=0;c<6;++c) {
+        set_class(defaults[c],classes[c],owners[c]);set_class(dummy,supers[c],bases[c]);
+        void *ptr=meta;memcpy(classes[c]+0x10,&ptr,8);
+        ptr=supers[c];memcpy(classes[c]+0x40,&ptr,8);
+        ptr=defaults[c];memcpy(classes[c]+0x118,&ptr,8);defaults[c][8]=0x10;
+        ptr=classes[c];memcpy(slots+c*24,&ptr,8);
+        void *previous=NULL;
+        for (unsigned f=0;f<sizeof(required_fields)/sizeof(*required_fields);++f) {
+            if (strcmp(owners[c],required_fields[f].owner)) continue;
+            uint32_t index=add_name(required_fields[f].name);
+            memcpy(properties[f]+0x28,&index,4);
+            memcpy(properties[f]+0x4C,&required_fields[f].offset,4);
+            memcpy(properties[f]+0x3C,&required_fields[f].size,4);
+            memcpy(properties[f]+0x20,&previous,8);previous=properties[f];
+        }
+        memcpy(classes[c]+0x50,&previous,8);
+    }
+    CHECK(validate_layout(objects,pool));
+    properties[3][0x4C]^=8;CHECK(!validate_layout(objects,pool));properties[3][0x4C]^=8;
+    void *saved;memcpy(&saved,classes[0]+0x118,8);
+    void *invalid=(void *)(uintptr_t)1;memcpy(classes[0]+0x118,&invalid,8);
+    CHECK(!validate_layout(objects,pool));memcpy(classes[0]+0x118,&saved,8);
+    memcpy(&saved,classes[0]+0x40,8);memcpy(classes[0]+0x40,&invalid,8);
+    CHECK(!validate_layout(objects,pool));memcpy(classes[0]+0x40,&saved,8);
+    memset(classes[3]+0x50,0,8);CHECK(!validate_layout(objects,pool));
+    *(int32_t *)(objects+0x24)=-1;CHECK(!validate_layout(objects,pool));
+    CHECK(!checked_read((void *)(uintptr_t)1,dummy,8));
+    CHECK(VirtualFree(image,0,MEM_RELEASE));
+    puts("PASS: relocated signature/name pool/object array; duplicate and changed code refused; changed/missing fields, bad default objects and unreadable pointers refused.");
+}

@@ -3,7 +3,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 release = Path(__file__).resolve().parent.parent
 source_mod = release / "BabyProofDynamites"
-archive = release / "dist" / "Baby-Proof-Dynamites-1.3.0.zip"
+archive = release / "dist" / "Baby-Proof-Dynamites-1.3.1.zip"
 archive.parent.mkdir(exist_ok=True)
 
 files = (

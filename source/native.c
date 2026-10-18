@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "debris_targets.h"
+#include "compatibility.h"
 
 enum { PATCH_SIZE = 7 };
 static const unsigned char signature[] = {0x48,0x8B,0xC4,0x48,0x89,0x58,0x10,0x48,0x89,0x70,0x18,0x48,0x89,0x78,0x20,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8D,0xA8,0x78,0xFD,0xFF,0xFF,0x48,0x81,0xEC,0x60,0x03,0x00,0x00,0x0F,0x29};
@@ -13,6 +14,7 @@ static const unsigned char destroy_signature[] = {0x48,0x8B,0xC4,0x48,0x89,0x58,
 static HMODULE self_module;
 static volatile LONG initialized;
 static const char *last_status = "Not initialized.";
+static char compatibility_status[256];
 static int allow_attached_vehicle_destruction;
 
 static const char *active_status(void) {
@@ -59,7 +61,7 @@ static void write_status(const char *text) {
 }
 
 // Find the signature in the game executable.
-static unsigned char *find_target(unsigned char *base, const unsigned char *pattern, size_t pattern_size, unsigned *matches) {
+static unsigned char *find_target_masked(unsigned char *base, const unsigned char *pattern, size_t pattern_size, size_t skip, size_t skip_size, unsigned *matches) {
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
     if (dos->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
     IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);
@@ -70,14 +72,20 @@ static unsigned char *find_target(unsigned char *base, const unsigned char *patt
         if (!(section[s].Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
         size_t size = section[s].Misc.VirtualSize;
         unsigned char *start = base + section[s].VirtualAddress;
+        if (!image_contains(base,start,size)) return NULL;
         if (size < pattern_size) continue;
         for (size_t i=0; i<=size-pattern_size; ++i) {
-            if (!memcmp(start+i, pattern, pattern_size)) {
+            if (!memcmp(start+i,pattern,skip) &&
+                !memcmp(start+i+skip+skip_size,pattern+skip+skip_size,pattern_size-skip-skip_size)) {
                 ++*matches; found = start+i;
             }
         }
     }
     return found;
+}
+
+static unsigned char *find_target(unsigned char *base, const unsigned char *pattern, size_t pattern_size, unsigned *matches) {
+    return find_target_masked(base,pattern,pattern_size,pattern_size,0,matches);
 }
 
 static unsigned char *allocate_near(unsigned char *target) {
@@ -232,7 +240,7 @@ static unsigned char guarded_destroy(void *component, void *actor) {
         }
     }
     unsigned char result=allowed ? original_destroy(component,actor) : 0;
-    snprintf(report,sizeof(report),"classic-v1.3.0 target=%s allowed=%d native_result=%u packaged_rail=%d\r\n",name,allowed,(unsigned)result,packaged_rail);
+    snprintf(report,sizeof(report),"classic-v1.3.1 target=%s allowed=%d native_result=%u packaged_rail=%d\r\n",name,allowed,(unsigned)result,packaged_rail);
     // Keep event records separate from startup status.
     wchar_t path[32768];DWORD n=GetModuleFileNameW(self_module,path,32768);
     if(n && n<32600) {
@@ -307,23 +315,34 @@ cleanup:
     return success;
 }
 
+static const char *compatibility_failure(unsigned char *game, const char *reason) {
+    IMAGE_DOS_HEADER *dos=(IMAGE_DOS_HEADER *)game;
+    IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(game+dos->e_lfanew);
+    snprintf(compatibility_status,sizeof(compatibility_status),
+        "INACTIVE: %s Game build %08lX/%08lX; mod 1.3.1. No memory was patched.",
+        reason,(unsigned long)nt->FileHeader.TimeDateStamp,(unsigned long)nt->OptionalHeader.SizeOfImage);
+    return compatibility_status;
+}
+
 static const char *activate(void) {
     load_config();
     unsigned char *game=(unsigned char *)GetModuleHandleW(L"Astro-Win64-Shipping.exe");
     if(!game) return "INACTIVE: Steam Win64 Astroneer is required.";
-    IMAGE_DOS_HEADER *dos=(IMAGE_DOS_HEADER *)game;
-    IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(game+dos->e_lfanew);
-    if(nt->FileHeader.TimeDateStamp!=0x6A9A7AE0 || nt->OptionalHeader.SizeOfImage!=0x6D04000)
-        return "INACTIVE: Unsupported game build. No memory was patched.";
     unsigned matches=0,destroy_matches=0;
     unsigned char *target=find_target(game,signature,sizeof(signature),&matches);
-    unsigned char *destroy=find_target(game,destroy_signature,sizeof(destroy_signature),&destroy_matches);
-    if(matches!=1 || destroy_matches!=1 || memcmp(target+0xC6,power_access,sizeof(power_access)))
-        return "INACTIVE: Explosion code differs from the supported build. No memory was patched.";
-    name_pool=game+0x65B8C40;
-    unsigned char *block=*(unsigned char **)(name_pool+0x10);
-    if(!block || memcmp(block+2,"None",4))
-        return "INACTIVE: Name-pool validation failed. No memory was patched.";
+    // Only the security-cookie address is allowed to vary in this signature.
+    unsigned char *destroy=find_target_masked(game,destroy_signature,sizeof(destroy_signature),0x65,4,&destroy_matches);
+    const unsigned char owner_access[]={0x48,0x8B,0x81,0xA8,0,0,0,0x48,0x8B,0x88,0x48,1,0,0};
+    if(matches!=1 || destroy_matches!=1 || !image_contains(game,target,0xD2) ||
+       memcmp(target+0xC6,power_access,sizeof(power_access)) || memcmp(target+0x76,owner_access,sizeof(owner_access)))
+        return compatibility_failure(game,"Explosion code could not be verified.");
+    name_pool=find_name_pool(game);
+    if(!name_pool) return compatibility_failure(game,"Name pool could not be verified.");
+    unsigned char *objects=find_object_array(game,destroy);
+    if(!objects || !validate_layout(objects,name_pool))
+        return compatibility_failure(game,"Required object fields could not be verified.");
+    unsigned char expected_destroy[sizeof(destroy_signature)];
+    memcpy(expected_destroy,destroy,sizeof(expected_destroy));
     unsigned char *stub=allocate_near(target),*guard=allocate_near(destroy);
     if(!stub || !guard) {
         if(stub) VirtualFree(stub,0,MEM_RELEASE);
@@ -348,7 +367,7 @@ static const char *activate(void) {
         VirtualFree(stub,0,MEM_RELEASE);VirtualFree(guard,0,MEM_RELEASE);
         return "INACTIVE: Cannot prepare native filters. No memory was patched.";
     }
-    Patch patches[2]={{target,signature,sizeof(signature),{0}},{destroy,destroy_signature,sizeof(destroy_signature),{0}}};
+    Patch patches[2]={{target,signature,sizeof(signature),{0}},{destroy,expected_destroy,sizeof(expected_destroy),{0}}};
     prepare_jump(&patches[0],stub);prepare_jump(&patches[1],guard);
     if(!install_patches(patches)) {
         VirtualFree(stub,0,MEM_RELEASE);VirtualFree(guard,0,MEM_RELEASE);
