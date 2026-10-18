@@ -15,16 +15,22 @@ static HMODULE self_module;
 static volatile LONG initialized;
 static const char *last_status = "Not initialized.";
 static char compatibility_status[256];
+static volatile LONG safe_explosions = 1;
 static int allow_attached_vehicle_destruction;
 
 static const char *active_status(void) {
+    if (!safe_explosions) return allow_attached_vehicle_destruction
+        ? "ACTIVE: Safe explosions OFF. Attached vehicle destruction ON. Vanilla explosions; vehicle setting saved for when Babyproof is ON."
+        : "ACTIVE: Safe explosions OFF. Attached vehicle destruction OFF. Vanilla explosions; vehicle setting saved for when Babyproof is ON.";
     return allow_attached_vehicle_destruction
-        ? "ACTIVE: Attached vehicle destruction ON. Only directly attached vehicles are exempt from protection. Tiny blasts; base equipment protected; caches/debris breakable."
-        : "ACTIVE: Attached vehicle destruction OFF. Vehicles and base equipment protected; tiny blasts; caches/debris breakable.";
+        ? "ACTIVE: Safe explosions ON. Attached vehicle destruction ON. Tiny blasts; base equipment protected; directly attached vehicles allowed; caches/debris breakable."
+        : "ACTIVE: Safe explosions ON. Attached vehicle destruction OFF. Tiny blasts; vehicles and base equipment protected; caches/debris breakable.";
 }
 
 static void load_options(const wchar_t *path) {
     wchar_t value[32];
+    GetPrivateProfileStringW(L"Explosions",L"Enabled",L"true",value,32,path);
+    InterlockedExchange(&safe_explosions,_wcsicmp(value,L"false")!=0);
     GetPrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",
                             L"false",value,32,path);
     allow_attached_vehicle_destruction = !_wcsicmp(value,L"true");
@@ -111,11 +117,18 @@ static size_t build_stub(unsigned char *p, unsigned char *target) {
     const uint32_t offsets[] = {0xB8,0xC0,0xC4,0xC8};
     const float values[] = {0.000001f,0.0f,0.001f,0.001f};
     size_t n=0;
+    // Preserve flags and stack. RAX is overwritten by the original prologue.
+    p[n++]=0x9C; // pushfq
+    p[n++]=0x48;p[n++]=0xB8;
+    uintptr_t enabled=(uintptr_t)&safe_explosions;memcpy(p+n,&enabled,8);n+=8;
+    p[n++]=0x83;p[n++]=0x38;p[n++]=0; // cmp dword ptr [rax], 0
+    p[n++]=0x74;p[n++]=40; // skip the four field writes when OFF
     for (unsigned i=0;i<4;++i) {
         p[n++]=0xC7; p[n++]=0x81; // mov dword ptr [rcx+offset], immediate
         memcpy(p+n,&offsets[i],4); n+=4;
         memcpy(p+n,&values[i],4); n+=4;
     }
+    p[n++]=0x9D; // popfq
     memcpy(p+n,signature,PATCH_SIZE); n+=PATCH_SIZE;
     p[n++]=0xE9;
     put32(p+n,(int32_t)((intptr_t)(target+PATCH_SIZE)-(intptr_t)(p+n+4))); n+=4;
@@ -208,21 +221,25 @@ static int is_packaged_rail_car(void *actor) {
 }
 
 static unsigned char guarded_destroy(void *component, void *actor) {
-    int attached_vehicle=is_attached_vehicle(component,actor);
-    int allowed=actor_is_breakable(actor) || attached_vehicle;
-    int packaged_rail=is_packaged_rail_car(actor);
-    if (actor_matches(actor,4)) allowed=0;
-    if (packaged_rail) {
-        void *owner=component ? *(void **)((unsigned char *)component+0xA8) : NULL;
-        allowed=allow_attached_vehicle_destruction && owner && immediate_parent(owner)==actor;
+    int enabled=safe_explosions!=0;
+    int allowed=1,packaged_rail=0;
+    if (enabled) {
+        int attached_vehicle=is_attached_vehicle(component,actor);
+        allowed=actor_is_breakable(actor) || attached_vehicle;
+        packaged_rail=is_packaged_rail_car(actor);
+        if (actor_matches(actor,4)) allowed=0;
+        if (packaged_rail) {
+            void *owner=component ? *(void **)((unsigned char *)component+0xA8) : NULL;
+            allowed=allow_attached_vehicle_destruction && owner && immediate_parent(owner)==actor;
+        }
+        // Wrecked Medium Platform B.
+        if (actor_matches(actor,3)) {
+            void *owner=component ? *(void **)((unsigned char *)component+0xA8) : NULL;
+            allowed=owner && immediate_parent(owner)==actor;
+        }
+        // Protect lids that are still attached to a research aid.
+        if (actor_matches(actor,2) && immediate_parent(actor)) allowed=0;
     }
-    // Wrecked Medium Platform B.
-    if (actor_matches(actor,3)) {
-        void *owner=component ? *(void **)((unsigned char *)component+0xA8) : NULL;
-        allowed=owner && immediate_parent(owner)==actor;
-    }
-    // Protect lids that are still attached to a research aid.
-    if (actor_matches(actor,2) && immediate_parent(actor)) allowed=0;
     // Record the filter decision and the game's return value.
     char name[256]="unknown",report[384];
     if (actor && name_pool) {
@@ -240,7 +257,7 @@ static unsigned char guarded_destroy(void *component, void *actor) {
         }
     }
     unsigned char result=allowed ? original_destroy(component,actor) : 0;
-    snprintf(report,sizeof(report),"classic-v1.3.1 target=%s allowed=%d native_result=%u packaged_rail=%d\r\n",name,allowed,(unsigned)result,packaged_rail);
+    snprintf(report,sizeof(report),"classic-v1.3.1 target=%s allowed=%d native_result=%u packaged_rail=%d safe_bombs=%d\r\n",name,allowed,(unsigned)result,packaged_rail,enabled);
     // Keep event records separate from startup status.
     wchar_t path[32768];DWORD n=GetModuleFileNameW(self_module,path,32768);
     if(n && n<32600) {

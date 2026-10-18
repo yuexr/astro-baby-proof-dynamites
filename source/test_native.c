@@ -31,6 +31,7 @@ static unsigned char *make_function(const unsigned char *prefix) {
 #include "test_compatibility.h"
 
 int main(void) {
+    CHECK(safe_explosions==1);
     unsigned char *bp=fake_block;memcpy(fake_pool+16,&bp,sizeof(bp));name_pool=fake_pool;
     add_name("None");
     test_compatibility();
@@ -110,6 +111,15 @@ int main(void) {
     for(unsigned i=0;i<4;++i)memcpy(expected+offsets[i],values+i,4);
     CHECK(((DetonateTest)target)(component)==1);CHECK(!memcmp(component,expected,sizeof(component)));
     set_class(actor,cls,"Smelter_C");CHECK(((DestroyFunction)destroy)(component,actor)==0);
+    InterlockedExchange(&safe_explosions,0);
+    memset(component,0x5A,sizeof(component));
+    unsigned char vanilla[512];memcpy(vanilla,component,sizeof(vanilla));
+    CHECK(((DetonateTest)target)(component)==1);CHECK(!memcmp(component,vanilla,sizeof(component)));
+    CHECK(((DestroyFunction)destroy)(component,actor)==1);
+    InterlockedExchange(&safe_explosions,1);
+    CHECK(((DetonateTest)target)(component)==1);CHECK(!memcmp(component,expected,sizeof(component)));
+    CHECK(((DestroyFunction)destroy)(component,actor)==0);
+    puts("PASS: main OFF skips every blast-field write and passes destruction to vanilla; main ON restores safe fields and equipment protection through installed hooks.");
     set_class(actor,cls,"Destructible_PlacementActor_DataCache_EXOChip_C");CHECK(((DestroyFunction)destroy)(component,actor)==1);
     set_class(actor,cls,"Debris_Base_01_C");CHECK(((DestroyFunction)destroy)(component,actor)==1);
     set_class(actor,cls,"Dynamite_C");CHECK(((DestroyFunction)destroy)(component,actor)==1);
@@ -219,14 +229,23 @@ int main(void) {
     // Missing/invalid config preserves protection; only explicit true opts in.
     wchar_t tempdir[MAX_PATH],config[MAX_PATH];
     CHECK(GetTempPathW(MAX_PATH,tempdir));CHECK(GetTempFileNameW(tempdir,L"bpd",0,config));
-    load_options(config);CHECK(!allow_attached_vehicle_destruction);
+    load_options(config);CHECK(!allow_attached_vehicle_destruction && safe_explosions);
+    const wchar_t *main_settings[]={L"false",L"true",L"FALSE",L"invalid",L"1"};
+    const int main_enabled[]={0,1,0,1,1};
+    for(unsigned i=0;i<5;++i) {
+        CHECK(WritePrivateProfileStringW(L"Explosions",L"Enabled",main_settings[i],config));
+        load_options(config);CHECK(safe_explosions==main_enabled[i]);
+    }
     const wchar_t *settings[]={L"true",L"false",L"TRUE",L"invalid",L"1"};
     const int enabled[]={1,0,1,0,0};
     for(unsigned i=0;i<5;++i) {
         CHECK(WritePrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",settings[i],config));
         load_options(config);CHECK(allow_attached_vehicle_destruction==enabled[i]);
     }
-    CHECK(DeleteFileW(config));load_options(config);CHECK(!allow_attached_vehicle_destruction);
+    CHECK(WritePrivateProfileStringW(L"Explosions",L"Enabled",L"false",config));
+    CHECK(WritePrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",L"true",config));
+    load_options(config);CHECK(!safe_explosions && allow_attached_vehicle_destruction);
+    CHECK(DeleteFileW(config));load_options(config);CHECK(!allow_attached_vehicle_destruction && safe_explosions);
     puts("PASS: config defaults/true/false/invalid; attached vehicle opt-in; nearby and cargo-mounted exclusions; base protection.");
     puts("PASS: protected equipment; caches/debris/consumables and inheritance; real detour/trampoline execution; exact field writes; atomic mismatch refusal.");
     return 0;
