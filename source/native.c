@@ -29,8 +29,12 @@ static const char *active_status(void) {
 
 static void load_options(const wchar_t *path) {
     wchar_t value[32];
-    GetPrivateProfileStringW(L"Explosions",L"Enabled",L"true",value,32,path);
-    InterlockedExchange(&safe_explosions,_wcsicmp(value,L"false")!=0);
+    GetPrivateProfileStringW(L"Explosions",L"ProtectVehicles",
+                            L"__missing__",value,32,path);
+    if (wcscmp(value,L"__missing__")) {
+        allow_attached_vehicle_destruction = !_wcsicmp(value,L"false");
+        return;
+    }
     GetPrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",
                             L"false",value,32,path);
     allow_attached_vehicle_destruction = !_wcsicmp(value,L"true");
@@ -409,6 +413,25 @@ __declspec(dllexport) int luaopen_babyproofdynamites_refresh(void *lua_state) {
     }
     write_status(last_status);
     return 0;
+}
+
+static int set_safe_explosions(LONG enabled) {
+    if (!strncmp(last_status,"ACTIVE:",7)) {
+        InterlockedExchange(&safe_explosions,enabled);
+        last_status=active_status();
+    }
+    write_status(last_status);
+    return 0;
+}
+
+__declspec(dllexport) int luaopen_babyproofdynamites_on(void *lua_state) {
+    (void)lua_state;
+    return set_safe_explosions(1);
+}
+
+__declspec(dllexport) int luaopen_babyproofdynamites_off(void *lua_state) {
+    (void)lua_state;
+    return set_safe_explosions(0);
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {

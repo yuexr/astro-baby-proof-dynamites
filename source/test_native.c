@@ -231,10 +231,9 @@ int main(void) {
     CHECK(GetTempPathW(MAX_PATH,tempdir));CHECK(GetTempFileNameW(tempdir,L"bpd",0,config));
     load_options(config);CHECK(!allow_attached_vehicle_destruction && safe_explosions);
     const wchar_t *main_settings[]={L"false",L"true",L"FALSE",L"invalid",L"1"};
-    const int main_enabled[]={0,1,0,1,1};
     for(unsigned i=0;i<5;++i) {
         CHECK(WritePrivateProfileStringW(L"Explosions",L"Enabled",main_settings[i],config));
-        load_options(config);CHECK(safe_explosions==main_enabled[i]);
+        load_options(config);CHECK(safe_explosions==1);
     }
     const wchar_t *settings[]={L"true",L"false",L"TRUE",L"invalid",L"1"};
     const int enabled[]={1,0,1,0,0};
@@ -244,9 +243,31 @@ int main(void) {
     }
     CHECK(WritePrivateProfileStringW(L"Explosions",L"Enabled",L"false",config));
     CHECK(WritePrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",L"true",config));
+    const wchar_t *protection_settings[]={L"true",L"false",L"TRUE",L"FALSE",L"invalid",L"1",L""};
+    const int destruction_allowed[]={0,1,0,1,0,0,0};
+    for(unsigned i=0;i<7;++i) {
+        CHECK(WritePrivateProfileStringW(L"Explosions",L"ProtectVehicles",protection_settings[i],config));
+        load_options(config);CHECK(allow_attached_vehicle_destruction==destruction_allowed[i]);
+    }
+    CHECK(WritePrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",L"false",config));
+    CHECK(WritePrivateProfileStringW(L"Explosions",L"ProtectVehicles",L"false",config));
+    load_options(config);CHECK(allow_attached_vehicle_destruction);
+    CHECK(WritePrivateProfileStringW(L"Explosions",L"ProtectVehicles",NULL,config));
+    load_options(config);CHECK(!allow_attached_vehicle_destruction);
+    CHECK(WritePrivateProfileStringW(L"Explosions",L"AllowAttachedVehicleDestruction",L"true",config));
+    load_options(config);CHECK(allow_attached_vehicle_destruction);
+    last_status=active_status();
+    CHECK(luaopen_babyproofdynamites_off(NULL)==0);CHECK(!safe_explosions);
     load_options(config);CHECK(!safe_explosions && allow_attached_vehicle_destruction);
+    CHECK(strstr(last_status,"Safe explosions OFF."));
+    CHECK(luaopen_babyproofdynamites_on(NULL)==0);CHECK(safe_explosions);
+    CHECK(strstr(last_status,"Safe explosions ON."));
+    last_status="INACTIVE: test";
+    CHECK(luaopen_babyproofdynamites_off(NULL)==0);CHECK(safe_explosions);
+    CHECK(!strcmp(last_status,"INACTIVE: test"));
+    last_status="Not initialized.";
     CHECK(DeleteFileW(config));load_options(config);CHECK(!allow_attached_vehicle_destruction && safe_explosions);
-    puts("PASS: config defaults/true/false/invalid; attached vehicle opt-in; nearby and cargo-mounted exclusions; base protection.");
+    puts("PASS: legacy Enabled key ignored; session-only ON/OFF exports and inactive rejection; config defaults/true/false/invalid; attached vehicle opt-in; nearby and cargo-mounted exclusions; base protection.");
     puts("PASS: protected equipment; caches/debris/consumables and inheritance; real detour/trampoline execution; exact field writes; atomic mismatch refusal.");
     return 0;
 }

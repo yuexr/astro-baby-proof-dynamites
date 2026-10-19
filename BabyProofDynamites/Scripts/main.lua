@@ -1,12 +1,16 @@
 local path = debug.getinfo(1, "S").source:gsub("^@", "")
 local directory = path:match("^(.*[/\\])")
-if not directory then error("[Baby-Proof Dynamites] Can't find the Scripts folder") end
+if not directory then error("[Baby-Proof Explosions] Can't find the Scripts folder") end
 local configPath = directory .. "../config.ini"
 local dllPath = directory .. "BabyProofDynamitesNative.dll"
 local initialize, reason = package.loadlib(dllPath, "luaopen_babyproofdynamites")
-if not initialize then error("[Baby-Proof Dynamites] Couldn't load the DLL: " .. tostring(reason)) end
+if not initialize then error("[Baby-Proof Explosions] Couldn't load the DLL: " .. tostring(reason)) end
 local refresh, refreshReason = package.loadlib(dllPath, "luaopen_babyproofdynamites_refresh")
-if not refresh then error("[Baby-Proof Dynamites] Couldn't load the config refresh function: " .. tostring(refreshReason)) end
+if not refresh then error("[Baby-Proof Explosions] Couldn't load the config refresh function: " .. tostring(refreshReason)) end
+local turnOn, onReason = package.loadlib(dllPath, "luaopen_babyproofdynamites_on")
+if not turnOn then error("[Baby-Proof Explosions] Couldn't load the ON function: " .. tostring(onReason)) end
+local turnOff, offReason = package.loadlib(dllPath, "luaopen_babyproofdynamites_off")
+if not turnOff then error("[Baby-Proof Explosions] Couldn't load the OFF function: " .. tostring(offReason)) end
 
 local function readStatus()
     local file, err = io.open(directory .. "BabyProofDynamites-status.txt", "r")
@@ -20,7 +24,7 @@ local function readStatus()
     if (enabled ~= "ON" and enabled ~= "OFF") or (vehicles ~= "ON" and vehicles ~= "OFF") then
         error("Unknown DLL status: " .. text)
     end
-    return { active = true, enabled = enabled == "ON", vehicles = vehicles == "ON", text = text }
+    return { active = true, enabled = enabled == "ON", vehiclesProtected = vehicles == "OFF", text = text }
 end
 
 local function saveSetting(keyName, enabled)
@@ -40,7 +44,7 @@ local function saveSetting(keyName, enabled)
             end
         else
             local key = line:match("^%s*([%w_]+)%s*=")
-            if not (inSection and key and key:lower() == keyName:lower()) then
+            if not (inSection and key and (key:lower() == keyName:lower() or key:lower() == "allowattachedvehicledestruction")) then
                 lines[#lines + 1] = line
             end
         end
@@ -61,67 +65,84 @@ local help = table.concat({
     "babyproof status",
     "babyproof on",
     "babyproof off",
-    "babyproof vehicles on",
-    "babyproof vehicles off",
-    "babyproof vehicles status",
-    "vehicles alias: v (e.g. babyproof v on)",
-    "default: ON (safe bombs)"
+    "babyproof vehicle on",
+    "babyproof vehicle off",
+    "vehicle aliases: vehicles, v (e.g. babyproof v on)",
+    "default: ON (safe bombs); on/off lasts until the game restarts"
 }, "\n")
 
 local function statusMessage(state)
-    if not state.active then return "Babyproof: INACTIVE\n" .. state.text:gsub("^INACTIVE:%s*", "") end
-    local mode = state.enabled and "ON (safe bombs)" or "OFF (vanilla explosions)"
-    local vehicles = state.vehicles and "ON" or "OFF"
-    if not state.enabled then vehicles = vehicles .. " (saved; applies when Babyproof is ON)" end
-    return "Mod: ACTIVE\nBabyproof: " .. mode .. "\nVehicle destruction: " .. vehicles
+    if not state.active then
+        return "Babyproof: INACTIVE\nEquipment: NOT PROTECTED BY THIS MOD\nVehicles: NOT PROTECTED BY THIS MOD\n" ..
+            state.text:gsub("^INACTIVE:%s*", "")
+    end
+    if not state.enabled then
+        return "Babyproof: OFF (vanilla explosions)\nEquipment: NOT PROTECTED\nVehicles: NOT PROTECTED"
+    end
+    local vehicles = state.vehiclesProtected and "PROTECTED" or "BREAKABLE (direct attachment required)"
+    return "Babyproof: ON (tiny explosions)\nEquipment: PROTECTED\nVehicles: " .. vehicles
+end
+
+local function reply(output, message)
+    local ok, state = pcall(readStatus)
+    local summary = ok and statusMessage(state) or
+        ("Babyproof: STATUS UNAVAILABLE\nProtection could not be confirmed.\n" .. tostring(state))
+    output:Log((message and (message .. "\n\n") or "") .. summary .. "\n")
+    return true
 end
 
 initialize()
 local startupOK, startup = pcall(readStatus)
 if startupOK then
-    print("[Baby-Proof Dynamites] " .. statusMessage(startup) .. "\n")
+    print("[Baby-Proof Explosions] " .. statusMessage(startup) .. "\n")
 else
-    print("[Baby-Proof Dynamites] Check the status file to see if it loaded.\n")
+    print("[Baby-Proof Explosions] Check the status file to see if it loaded.\n")
 end
 
 RegisterConsoleCommandHandler("babyproof", function(_, parameters, output)
     local group = parameters[1] and parameters[1]:lower()
     local action = parameters[2] and parameters[2]:lower()
-    if #parameters == 0 then output:Log(help .. "\n"); return true end
+    if #parameters == 0 then return reply(output, help) end
     local mainCommand = #parameters == 1 and
         (group == "status" or group == "on" or group == "off")
-    local vehicleCommand = #parameters == 2 and (group == "vehicles" or group == "v") and
-        (action == "on" or action == "off" or action == "status")
+    local vehicleCommand = #parameters == 2 and (group == "vehicle" or group == "vehicles" or group == "v") and
+        (action == "on" or action == "off")
     if not mainCommand and not vehicleCommand then
-        output:Log("Unknown command.\n" .. help .. "\n")
-        return true
+        return reply(output, "Unknown command.\n" .. help)
     end
+    if mainCommand and group == "status" then return reply(output) end
     local ok, message = pcall(function()
         local state = readStatus()
-        if mainCommand and group == "status" then return statusMessage(state) end
-        if not state.active then return statusMessage(state) end
+        if not state.active then return "Command not applied." end
         if mainCommand then
-            local requested = group == "on"
-            saveSetting("Enabled", requested)
-            refresh()
+            if group == "on" then
+                saveSetting("ProtectVehicles", true)
+                refresh()
+                turnOn()
+            else
+                turnOff()
+            end
             state = readStatus()
-            assert(state.active and state.enabled == requested, "Setting didn't update. Check the status file.")
-            return "Babyproof: " .. (state.enabled and "ON (safe bombs)." or "OFF (vanilla explosions).") ..
-                " Saved to config.ini."
+            assert(state.active and state.enabled == (group == "on"), "Setting didn't update. Check the status file.")
+            if group == "on" then
+                assert(state.vehiclesProtected, "Vehicle protection didn't update. Check the status file.")
+                return "Vehicle protection saved to config.ini."
+            end
+            return "This change lasts until the game restarts."
         end
-        if action ~= "status" then
-            local requested = action == "on"
-            saveSetting("AllowAttachedVehicleDestruction", requested)
-            refresh()
-            state = readStatus()
-            assert(state.active and state.vehicles == requested, "Setting didn't update. Check the status file.")
-        end
-        local result = "Vehicle destruction: " .. (state.vehicles and "ON" or "OFF") .. "."
-        if not state.enabled then result = result .. " Applies when Babyproof is ON." end
-        if action ~= "status" then result = result .. " Saved to config.ini." end
-        return result
+        local protect = action == "on"
+        local switchedOn = protect and not state.enabled
+        saveSetting("ProtectVehicles", protect)
+        refresh()
+        if switchedOn then turnOn() end
+        state = readStatus()
+        assert(state.active and state.vehiclesProtected == protect, "Setting didn't update. Check the status file.")
+        if protect then assert(state.enabled, "Babyproof didn't turn ON. Check the status file.") end
+        return (switchedOn and "Babyproof turned ON. " or "") .. "Vehicle protection saved to config.ini."
     end)
-    output:Log(tostring(message) .. "\n")
-    if not ok then print("[Baby-Proof Dynamites] " .. tostring(message) .. "\n") end
-    return true
+    if not ok then
+        message = "Command failed: " .. tostring(message)
+        print("[Baby-Proof Explosions] " .. message .. "\n")
+    end
+    return reply(output, message)
 end)

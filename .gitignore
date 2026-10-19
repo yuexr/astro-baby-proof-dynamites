@@ -4,3 +4,4 @@ __pycache__/
 *.pdb
 *.lib
 **/BabyProofDynamites-status.txt
+*.[pP][sS][dD]
