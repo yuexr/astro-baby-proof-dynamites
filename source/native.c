@@ -261,7 +261,7 @@ static unsigned char guarded_destroy(void *component, void *actor) {
         }
     }
     unsigned char result=allowed ? original_destroy(component,actor) : 0;
-    snprintf(report,sizeof(report),"classic-v1.3.1 target=%s allowed=%d native_result=%u packaged_rail=%d safe_bombs=%d\r\n",name,allowed,(unsigned)result,packaged_rail,enabled);
+    snprintf(report,sizeof(report),"classic-v1.4.0 target=%s allowed=%d native_result=%u packaged_rail=%d safe_bombs=%d\r\n",name,allowed,(unsigned)result,packaged_rail,enabled);
     // Keep event records separate from startup status.
     wchar_t path[32768];DWORD n=GetModuleFileNameW(self_module,path,32768);
     if(n && n<32600) {
@@ -340,7 +340,7 @@ static const char *compatibility_failure(unsigned char *game, const char *reason
     IMAGE_DOS_HEADER *dos=(IMAGE_DOS_HEADER *)game;
     IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(game+dos->e_lfanew);
     snprintf(compatibility_status,sizeof(compatibility_status),
-        "INACTIVE: %s Game build %08lX/%08lX; mod 1.3.1. No memory was patched.",
+        "INACTIVE: %s Game build %08lX/%08lX; mod 1.4.0. No memory was patched.",
         reason,(unsigned long)nt->FileHeader.TimeDateStamp,(unsigned long)nt->OptionalHeader.SizeOfImage);
     return compatibility_status;
 }
